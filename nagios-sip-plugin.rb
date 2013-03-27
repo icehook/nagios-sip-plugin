@@ -1,17 +1,17 @@
 #!/usr/bin/env ruby
 
 #     Copyright (C) 2010  Iñaki Baz Castillo <ibc@aliax.net>
-# 
+#
 #     This program is free software; you can redistribute it and/or modify
 #     it under the terms of the GNU General Public License as published by
 #     the Free Software Foundation; either version 2 of the License, or
 #     (at your option) any later version.
-# 
+#
 #     This program is distributed in the hope that it will be useful,
 #     but WITHOUT ANY WARRANTY; without even the implied warranty of
 #     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #     GNU General Public License for more details.
-# 
+#
 #     You should have received a copy of the GNU General Public License
 #     along with this program; if not, write to the Free Software
 #     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
@@ -32,36 +32,36 @@ module NagiosSipPlugin
   class NonExpectedStatusCode < StandardError ; end
   class WrongResponse < StandardError ; end
 
-  
+
   class Utils
-  
+
     def self.random_string(length=6, chars="abcdefghjkmnpqrstuvwxyz0123456789")
       string = ''
       length.downto(1) { |i| string << chars[rand(chars.length - 1)] }
       string
     end
-    
+
     def self.generate_tag()
       random_string(8)
     end
-    
+
     def self.generate_branch()
       'z9hG4bK' + random_string(8)
     end
-    
+
     def self.generate_callid()
       random_string(10)
     end
-    
+
     def self.generate_cseq()
       rand(999)
     end
-    
+
   end  # class Utils
 
 
   class Request
-    
+
     def initialize(options = {})
       @server_address = options[:server_address]
       @server_port = options[:server_port]
@@ -76,7 +76,7 @@ module NagiosSipPlugin
       @ca_path = options[:ca_path]
       @verify_tls = options[:verify_tls]
     end
-    
+
     def get_local_ip
       orig, Socket.do_not_reverse_lookup = Socket.do_not_reverse_lookup, true
       UDPSocket.open do |s|
@@ -91,7 +91,7 @@ module NagiosSipPlugin
       end
     end
     private :get_local_ip
-    
+
     def connect
       begin
         case @transport
@@ -129,7 +129,7 @@ module NagiosSipPlugin
       end
     end
     private :connect
-    
+
     def send
       if ! connect
         return false
@@ -148,14 +148,14 @@ module NagiosSipPlugin
         raise TransportError, "Couldn't send the request via #{@transport.upcase} (#{e.class}: #{e.message}"
       end
     end
-    
+
   end  # class Request
-  
-  
+
+
   class OptionsRequest < Request
-    
+
     attr_reader :request
-    
+
     def get_request
       headers = <<-END_HEADERS
         OPTIONS #{@ruri} SIP/2.0
@@ -195,9 +195,55 @@ module NagiosSipPlugin
       return status_code
 
     end  # def receive
-  
+
   end  # class OptionsRequest
-  
+
+  class InviteRequest < Request
+
+    attr_reader :request
+
+    def get_request
+      headers = <<-END_HEADERS
+        INVITE #{@ruri} SIP/2.0
+        Via: SIP/2.0/#{@transport.upcase} #{@local_ip}#{":#{@local_port}" if @local_port != 0};rport;branch=#{Utils.generate_branch}
+        Max-Forwards: 5
+        To: <#{@ruri}>
+        From: <#{@from_uri}>;tag=#{Utils.generate_tag}
+        Call-ID: #{Utils.generate_callid}@#{@local_ip}
+        CSeq: #{Utils.generate_cseq} INVITE
+        Content-Length: 0
+      END_HEADERS
+      headers.gsub!(/^[\s\t]*/,"")
+      headers.gsub!(/\n/,"\r\n")
+      return headers + "\r\n"
+    end
+    private :get_request
+
+    def receive
+      response_first_line = ""
+      begin
+        Timeout::timeout(@timeout) {
+          response_first_line = @io.readline("\r\n")
+        }
+      rescue Timeout::Error => e
+        raise ResponseTimeout, "Timeout receiving the response via #{@transport.upcase} (#{e.class}: #{e.message})"
+      rescue => e
+        raise TransportError, "Couldn't receive the response via #{@transport.upcase} (#{e.class}: #{e.message})"
+      end
+      if response_first_line !~ /^SIP\/2\.0 \d{3} [^\n]*/i
+        raise WrongResponse, "Wrong response first line received: \"#{response_first_line.gsub(/[\n\r]/,'')}\""
+      end
+
+      status_code = response_first_line.split(" ")[1]
+      if @expected_status_code && @expected_status_code != status_code
+        raise NonExpectedStatusCode, "Received a #{status_code} but #{@expected_status_code} was required"
+      end
+      return status_code
+
+    end  # def receive
+
+  end  # class InviteRequest
+
 end  # module NagiosSipPlugin
 
 
@@ -217,10 +263,11 @@ Usage mode:    nagios-sip-plugin.rb [OPTIONS]
     -T SECONDS       :    Timeout in seconds (default '2').
     -vt              :    Verify server's TLS certificate when using SIP TLS (default false).
     -ca CA_PATH      :    Directory with public PEM files for validating server's TLS certificate (default '/etc/ssl/certs/').
+    -m REQUEST_METHOD:    The request method INVITE or OPTIONS (default OPTIONS).
 
   Homepage:
     https://github.com/ibc/nagios-sip-plugin
-    
+
 END_HELP
 end
 
@@ -268,23 +315,26 @@ server_port = args[/-p ([^\s]*)/,1] || 5060
 server_port = server_port.to_i
 local_port = args[/-lp ([^\s]*)/,1] || 0
 local_port = local_port.to_i
-ruri = args[/-r ([^\s]*)/,1] || "sip:ping@" + server_address + (server_port ? ":" + server_port.to_s : "")
-from_uri = args[/-f ([^\s]*)/,1] ||"sip:nagios@" + server_address
+ruri = args[/-r ([^\s]*)/,1] || "sip:ping@#{server_address}"
+ruri = "#{ruri}:#{server_port}" if server_port
+from_uri = args[/-f ([^\s]*)/,1] ||"sip:nagios@#{server_address}"
 expected_status_code = args[/-c ([^\s]*)/,1] || nil
 timeout = args[/-T ([^\s]*)/,1] || 2
 timeout = timeout.to_i
 verify_tls = args =~ /-vt/ ? true : false
 ca_path = args[/-ca ([^\s]*)/,1] || "/etc/ssl/certs/"
+request_method = (args[/-m ([^\s]*)/,1] || "OPTIONS").upcase
 
 # Check parameters.
 log_unknown "transport protocol (-t) must be 'tls', 'udp', or 'tcp'"  unless transport =~ /^(tls|udp|tcp)$/
 log_unknown "server address (-s) is required"  unless server_address
 log_unknown "expected status code (-c) must be [123456]XX"  unless expected_status_code =~ /^[123456][0-9]{2}$/ or not expected_status_code
 log_unknown "timeout (-T) must be greater than 0"  unless timeout > 0
+log_unknown "request_method (-m) must be OPTIONS or INVITE"  unless %w(OPTIONS INVITE)
 
 
 begin
-  options = OptionsRequest.new({
+  options = {
     :server_address => server_address,
     :server_port => server_port,
     :local_port => local_port,
@@ -295,9 +345,16 @@ begin
     :timeout => timeout,
     :verify_tls => verify_tls,
     :ca_path => ca_path
-  })
-  options.send
-  status_code = options.receive
+  }
+
+  request = if request_method == 'OPTIONS'
+    OptionsRequest.new options
+  elsif request_method == 'INVITE'
+    InviteRequest.new options
+  end
+
+  request.send
+  status_code = request.receive
   log_ok "status code = " + status_code
 rescue NonExpectedStatusCode => e
   log_warning e.message
