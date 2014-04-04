@@ -275,6 +275,7 @@ Usage mode:    nagios-sip-plugin.rb [OPTIONS]
     -vt              :    Verify server's TLS certificate when using SIP TLS (default false).
     -ca CA_PATH      :    Directory with public PEM files for validating server's TLS certificate (default '/etc/ssl/certs/').
     -m REQUEST_METHOD:    The request method INVITE or OPTIONS (default OPTIONS).
+    -D               :    Full response debug Information (default false).
 
   Homepage:
     https://github.com/ibc/nagios-sip-plugin
