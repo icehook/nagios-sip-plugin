@@ -75,6 +75,7 @@ module NagiosSipPlugin
       @timeout = options[:timeout]
       @ca_path = options[:ca_path]
       @verify_tls = options[:verify_tls]
+      @debug = options[:debug]
     end
 
     def get_local_ip
@@ -128,6 +129,12 @@ module NagiosSipPlugin
         raise TransportError, "Couldn't create the #{@transport.upcase} socket (#{e.class}: #{e.message})"
       end
     end
+
+    def debug(message)
+      puts "-- Debug Information: "
+      message.each { |line| puts line.chomp }
+    end # def debug
+
     private :connect
 
     def send
@@ -220,21 +227,25 @@ module NagiosSipPlugin
     private :get_request
 
     def receive
-      response_first_line = ""
+      response = []
       begin
         Timeout::timeout(@timeout) {
-          response_first_line = @io.readline("\r\n")
+          response << @io.gets until response.last == "\r\n"
+          #response_first_line = @io.readline("\r\n")
         }
       rescue Timeout::Error => e
         raise ResponseTimeout, "Timeout receiving the response via #{@transport.upcase} (#{e.class}: #{e.message})"
       rescue => e
         raise TransportError, "Couldn't receive the response via #{@transport.upcase} (#{e.class}: #{e.message})"
       end
-      if response_first_line !~ /^SIP\/2\.0 \d{3} [^\n]*/i
-        raise WrongResponse, "Wrong response first line received: \"#{response_first_line.gsub(/[\n\r]/,'')}\""
+      if response.first !~ /^SIP\/2\.0 \d{3} [^\n]*/i
+        raise WrongResponse, "Wrong response first line received: \"#{response.first.gsub(/[\n\r]/,'')}\""
       end
 
-      status_code = response_first_line.split(" ")[1]
+      status_code = response.first.split(" ")[1]
+
+      debug(response) if @debug
+
       if @expected_status_code && @expected_status_code != status_code
         raise NonExpectedStatusCode, "Received a #{status_code} but #{@expected_status_code} was required"
       end
@@ -324,6 +335,7 @@ timeout = timeout.to_i
 verify_tls = args =~ /-vt/ ? true : false
 ca_path = args[/-ca ([^\s]*)/,1] || "/etc/ssl/certs/"
 request_method = (args[/-m ([^\s]*)/,1] || "OPTIONS").upcase
+debug = args =~ /-D/ ? true : false
 
 # Check parameters.
 log_unknown "transport protocol (-t) must be 'tls', 'udp', or 'tcp'"  unless transport =~ /^(tls|udp|tcp)$/
@@ -344,7 +356,8 @@ begin
     :expected_status_code => expected_status_code,
     :timeout => timeout,
     :verify_tls => verify_tls,
-    :ca_path => ca_path
+    :ca_path => ca_path,
+    :debug => debug
   }
 
   request = if request_method == 'OPTIONS'
