@@ -24,6 +24,9 @@ require "openssl"
 
 module NagiosSipPlugin
 
+  EMPTY_LINE = "\r\n"
+  RESPONSE_FIRST_LINE = /^SIP\/2\.0 \d{3} [^\n]*/i
+
   # Custom errors.
   class TransportError < StandardError ; end
   class ConnectTimeout < StandardError ; end
@@ -71,7 +74,7 @@ module NagiosSipPlugin
       @from_uri = options[:from_uri]
       @ruri = options[:ruri]
       @request = get_request()
-      @expected_status_code = options[:expected_status_code]
+      @expected_status_codes = options[:expected_status_codes]
       @timeout = options[:timeout]
       @ca_path = options[:ca_path]
       @verify_tls = options[:verify_tls]
@@ -156,6 +159,53 @@ module NagiosSipPlugin
       end
     end
 
+    def receive
+      response = Array.new
+      status_codes = Array.new
+      begin
+        @expected_status_codes.empty? ? expected_number_of_responses = 1 : expected_number_of_responses = @expected_status_codes.length
+        number_of_responses = 0
+        Timeout::timeout(@timeout) {
+          while response << @io.gets
+            number_of_responses += 1 if response.last == EMPTY_LINE
+            status_codes << response.last.split(" ")[1] if response.last =~ RESPONSE_FIRST_LINE
+            break if number_of_responses == expected_number_of_responses
+          end
+        }
+      rescue Timeout::Error => e
+        raise ResponseTimeout, "Timeout receiving the response via #{@transport.upcase} (#{e.class}: #{e.message})"
+      rescue => e
+        raise TransportError, "Couldn't receive the response via #{@transport.upcase} (#{e.class}: #{e.message})"
+      end
+      if response.first !~ RESPONSE_FIRST_LINE
+        raise WrongResponse, "Wrong response first line received: \"#{response.first.gsub(/[\n\r]/,'')}\""
+      end
+
+      debug(response) if @debug
+
+      codes = Hash.new
+      @expected_status_codes.each_index { |index| codes.store(@expected_status_codes[index], status_codes[index]) }
+      if codes.empty?
+        log_ok "status code = " + status_codes.first
+      else
+        codes.each do |expected, actual|
+          if expected == actual or expected.nil?
+            log_ok "status code = " + actual
+          else
+            log_warning "Received a #{actual} but #{expected} was required"
+          end
+        end
+      end
+
+      #@expected_status_codes.each do |exp_code|
+      #  unless status_codes.include?(exp_code) or exp_code.empty?
+      #    raise NonExpectedStatusCode, "Received a #{status_codes} but #{exp_code} was required"
+      #  end
+      #  return status_codes
+      #end
+
+    end  # def receive
+
   end  # class Request
 
 
@@ -178,30 +228,6 @@ module NagiosSipPlugin
       headers.gsub!(/\n/,"\r\n")
       return headers + "\r\n"
     end
-    private :get_request
-
-    def receive
-      response_first_line = ""
-      begin
-        Timeout::timeout(@timeout) {
-          response_first_line = @io.readline("\r\n")
-        }
-      rescue Timeout::Error => e
-        raise ResponseTimeout, "Timeout receiving the response via #{@transport.upcase} (#{e.class}: #{e.message})"
-      rescue => e
-        raise TransportError, "Couldn't receive the response via #{@transport.upcase} (#{e.class}: #{e.message})"
-      end
-      if response_first_line !~ /^SIP\/2\.0 \d{3} [^\n]*/i
-        raise WrongResponse, "Wrong response first line received: \"#{response_first_line.gsub(/[\n\r]/,'')}\""
-      end
-
-      status_code = response_first_line.split(" ")[1]
-      if @expected_status_code && @expected_status_code != status_code
-        raise NonExpectedStatusCode, "Received a #{status_code} but #{@expected_status_code} was required"
-      end
-      return status_code
-
-    end  # def receive
 
   end  # class OptionsRequest
 
@@ -224,34 +250,6 @@ module NagiosSipPlugin
       headers.gsub!(/\n/,"\r\n")
       return headers + "\r\n"
     end
-    private :get_request
-
-    def receive
-      response = []
-      begin
-        Timeout::timeout(@timeout) {
-          response << @io.gets until response.last == "\r\n"
-          #response_first_line = @io.readline("\r\n")
-        }
-      rescue Timeout::Error => e
-        raise ResponseTimeout, "Timeout receiving the response via #{@transport.upcase} (#{e.class}: #{e.message})"
-      rescue => e
-        raise TransportError, "Couldn't receive the response via #{@transport.upcase} (#{e.class}: #{e.message})"
-      end
-      if response.first !~ /^SIP\/2\.0 \d{3} [^\n]*/i
-        raise WrongResponse, "Wrong response first line received: \"#{response.first.gsub(/[\n\r]/,'')}\""
-      end
-
-      status_code = response.first.split(" ")[1]
-
-      debug(response) if @debug
-
-      if @expected_status_code && @expected_status_code != status_code
-        raise NonExpectedStatusCode, "Received a #{status_code} but #{@expected_status_code} was required"
-      end
-      return status_code
-
-    end  # def receive
 
   end  # class InviteRequest
 
@@ -270,7 +268,7 @@ Usage mode:    nagios-sip-plugin.rb [OPTIONS]
     -lp LOCAL_PORT   :    Local port from which UDP request will be sent. Just valid for SIP UDP (default random).
     -r REQUEST_URI   :    Request URI (default 'sip:ping@SERVER_IP:SERVER_PORT').
     -f FROM_URI      :    From URI (default 'sip:nagios@SERVER_IP').
-    -c SIP_CODE      :    Expected status code (i.e: '200'). If null then any code is valid.
+    -c SIP_CODE(s)   :    Expected status code (i.e: '200'). For multiple codes use comma delimited list. (i.e: '100,200'). If null then any code is valid.
     -T SECONDS       :    Timeout in seconds (default '2').
     -vt              :    Verify server's TLS certificate when using SIP TLS (default false).
     -ca CA_PATH      :    Directory with public PEM files for validating server's TLS certificate (default '/etc/ssl/certs/').
@@ -289,12 +287,10 @@ end
 
 def log_ok(text)
   $stdout.puts "OK:#{text}"
-  exit 0
 end
 
 def log_warning(text)
   $stdout.puts "WARNING:#{text}"
-  exit 1
 end
 
 def log_critical(text)
@@ -330,7 +326,7 @@ local_port = local_port.to_i
 ruri = args[/-r ([^\s]*)/,1] || "sip:ping@#{server_address}"
 ruri = "#{ruri}:#{server_port}" if server_port
 from_uri = args[/-f ([^\s]*)/,1] ||"sip:nagios@#{server_address}"
-expected_status_code = args[/-c ([^\s]*)/,1] || nil
+eps = args[/-c ([^\s]*)/,1] || ""
 timeout = args[/-T ([^\s]*)/,1] || 2
 timeout = timeout.to_i
 verify_tls = args =~ /-vt/ ? true : false
@@ -341,7 +337,11 @@ debug = args =~ /-D/ ? true : false
 # Check parameters.
 log_unknown "transport protocol (-t) must be 'tls', 'udp', or 'tcp'"  unless transport =~ /^(tls|udp|tcp)$/
 log_unknown "server address (-s) is required"  unless server_address
-log_unknown "expected status code (-c) must be [123456]XX"  unless expected_status_code =~ /^[123456][0-9]{2}$/ or not expected_status_code
+if eps =~ /^([123456][0-9]{2},?)+$/ or eps.empty?
+  expected_status_codes = eps.split(",")
+else
+  log_unknown "expected status code (-c) must be [123456]XX"
+end
 log_unknown "timeout (-T) must be greater than 0"  unless timeout > 0
 log_unknown "request_method (-m) must be OPTIONS or INVITE"  unless %w(OPTIONS INVITE)
 
@@ -354,7 +354,7 @@ begin
     :transport => transport,
     :ruri => ruri,
     :from_uri => from_uri,
-    :expected_status_code => expected_status_code,
+    :expected_status_codes => expected_status_codes,
     :timeout => timeout,
     :verify_tls => verify_tls,
     :ca_path => ca_path,
@@ -368,8 +368,8 @@ begin
   end
 
   request.send
-  status_code = request.receive
-  log_ok "status code = " + status_code
+  request.receive
+
 rescue NonExpectedStatusCode => e
   log_warning e.message
 rescue TransportError, ConnectTimeout, RequestTimeout, ResponseTimeout, WrongResponse => e

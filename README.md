@@ -78,10 +78,11 @@ Usage mode:    nagios-sip-plugin.rb [OPTIONS]
     -lp LOCAL_PORT   :    Local port from which UDP request will be sent. Just valid for SIP UDP (default random).
     -r REQUEST_URI   :    Request URI (default 'sip:ping@SERVER_IP:SERVER_PORT').
     -f FROM_URI      :    From URI (default 'sip:nagios@SERVER_IP').
-    -c SIP_CODE      :    Expected status code (i.e: '200'). If null then any code is valid.
+    -c SIP_CODE(s)   :    Expected status code (i.e: '200'). For multiple codes use comma delimited list. (i.e: '200,300'). If null then any code is valid.
     -T SECONDS       :    Timeout in seconds (default '2').
     -vt              :    Verify server's TLS certificate when using SIP TLS (default false).
     -ca CA_PATH      :    Directory with public PEM files for validating server's TLS certificate (default '/etc/ssl/certs/').
+    -D               :    Full response debug Information (default false).
 
   Homepage:
     https://github.com/ibc/nagios-sip-plugin
