@@ -132,13 +132,12 @@ module NagiosSipPlugin
         raise TransportError, "Couldn't create the #{@transport.upcase} socket (#{e.class}: #{e.message})"
       end
     end
+    private :connect
 
     def debug(message)
       puts "-- Debug Information: "
       message.each { |line| puts line.chomp }
     end # def debug
-
-    private :connect
 
     def send
       if ! connect
@@ -186,23 +185,18 @@ module NagiosSipPlugin
       codes = Hash.new
       @expected_status_codes.each_index { |index| codes.store(@expected_status_codes[index], status_codes[index]) }
       if codes.empty?
-        log_ok "status code = " + status_codes.first
+        log_ok("status code = " + status_codes.first)
       else
         codes.each do |expected, actual|
           if expected == actual or expected.nil?
-            log_ok "status code = " + actual
+            log_ok("status code = " + actual)
+          elsif codes.last
+            log_ok("status code = " + actual, exit=true)
           else
-            log_warning "Received a #{actual} but #{expected} was required"
+            log_warning("Received a #{actual} but #{expected} was required")
           end
         end
       end
-
-      #@expected_status_codes.each do |exp_code|
-      #  unless status_codes.include?(exp_code) or exp_code.empty?
-      #    raise NonExpectedStatusCode, "Received a #{status_codes} but #{exp_code} was required"
-      #  end
-      #  return status_codes
-      #end
 
     end  # def receive
 
@@ -285,12 +279,14 @@ def suggest_help
   puts "\nGet help by running:    ruby nagios-sip-plugin.rb -h\n"
 end
 
-def log_ok(text)
+def log_ok(text, exit = false)
   $stdout.puts "OK:#{text}"
+  exit 0 if exit
 end
 
 def log_warning(text)
   $stdout.puts "WARNING:#{text}"
+  exit 1
 end
 
 def log_critical(text)
@@ -371,7 +367,7 @@ begin
   request.receive
 
 rescue NonExpectedStatusCode => e
-  log_warning e.message
+  log_warning(e.message)
 rescue TransportError, ConnectTimeout, RequestTimeout, ResponseTimeout, WrongResponse => e
-  log_critical e.message
+  log_critical(e.message)
 end
