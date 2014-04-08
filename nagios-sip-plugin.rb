@@ -185,17 +185,14 @@ module NagiosSipPlugin
       codes = Hash.new
       @expected_status_codes.each_index { |index| codes.store(@expected_status_codes[index], status_codes[index]) }
       if codes.empty?
-        log_ok("status code = " + status_codes.first)
+        log_ok status_codes
       else
         codes.each do |expected, actual|
-          if expected == actual or expected.nil?
-            log_ok("status code = " + actual)
-          elsif codes.last
-            log_ok("status code = " + actual, exit=true)
-          else
+          unless expected == actual or expected.nil?
             log_warning("Received a #{actual} but #{expected} was required")
           end
         end
+        log_ok status_codes
       end
 
     end  # def receive
@@ -279,9 +276,9 @@ def suggest_help
   puts "\nGet help by running:    ruby nagios-sip-plugin.rb -h\n"
 end
 
-def log_ok(text, exit = false)
-  $stdout.puts "OK:#{text}"
-  exit 0 if exit
+def log_ok(text)
+  $stdout.puts "OK:status code = #{text.join(",")}"
+  exit 0
 end
 
 def log_warning(text)
