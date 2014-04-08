@@ -23,10 +23,11 @@ As any Nagios plugin it must behave according to Nagios [API](http://nagios.sour
 
 #### `OK` status
 
-The plugin returns `0` value in two cases:
+The plugin returns `0` value in three cases:
 
 * `-c` (expected status code) is not set and the server replies any response.
 * `-c` is set to a specific value (i.e. "200") and the server replies the same status code.
+# `-c` is set to a list of values (i.e. "100,200") the server replies to the last code.
 
 It also prints to `stdout` a string to be parsed by Nagios:
 ```
